@@ -97,7 +97,6 @@ class PWS_Pricing_System {
         add_action('wp_ajax_pws_add_a_size_to_cart', array($this, 'ajax_add_a_size_to_cart'));
         add_action('wp_ajax_nopriv_pws_add_a_size_to_cart', array($this, 'ajax_add_a_size_to_cart'));
         add_action('wp_ajax_pws_save_a_sizes_config', array($this, 'ajax_save_a_sizes_config'));
-        add_action('wp_ajax_pws_delete_a_size_pricing', array($this, 'ajax_delete_a_size_pricing'));
         
         // AJAX - Cart
         add_action('wp_ajax_pws_remove_cart_item', array($this, 'ajax_remove_cart_item'));
@@ -151,8 +150,6 @@ class PWS_Pricing_System {
         // AJAX: Update cart (T8)
         add_action('wp_ajax_pws_update_cart', array($this, 'ajax_update_cart'));
         add_action('wp_ajax_nopriv_pws_update_cart', array($this, 'ajax_update_cart'));
-        
-        register_activation_hook(__FILE__, array($this, 'activate'));
     }
     
     /**
@@ -443,8 +440,10 @@ class PWS_Pricing_System {
         if (!$load_assets) return;
         
         // Cache busting version - use file modification time
-        $css_version = filemtime(PWS_PLUGIN_PATH . 'assets/css/pws-styles.css');
-        $js_version = filemtime(PWS_PLUGIN_PATH . 'assets/js/pws-scripts.js');
+        $css_file = PWS_PLUGIN_PATH . 'assets/css/pws-styles.css';
+        $js_file  = PWS_PLUGIN_PATH . 'assets/js/pws-scripts.js';
+        $css_version = file_exists($css_file) ? filemtime($css_file) : PWS_VERSION;
+        $js_version  = file_exists($js_file)  ? filemtime($js_file)  : PWS_VERSION;
         
         wp_enqueue_style('pws-styles', PWS_PLUGIN_URL . 'assets/css/pws-styles.css', array(), $css_version);
         wp_enqueue_script('pws-scripts', PWS_PLUGIN_URL . 'assets/js/pws-scripts.js', array('jquery'), $js_version, true);
@@ -2893,6 +2892,14 @@ class PWS_Pricing_System {
         <?php
     }
     
+    /**
+     * Static activation entry point (called by register_activation_hook at top level)
+     */
+    public static function plugin_activate() {
+        $instance = self::get_instance();
+        $instance->activate();
+    }
+    
     public function activate() {
         // Set default pricing formula (CRITICAL: must be 0.00072)
         if (!get_option('pws_custom_pricing_params')) {
@@ -3689,6 +3696,9 @@ class PWS_Pricing_System {
         }
     }
 }
+
+// Activation hook must be registered at top level, outside plugins_loaded
+register_activation_hook( __FILE__, array( 'PWS_Pricing_System', 'plugin_activate' ) );
 
 // Initialize plugin when WooCommerce is loaded
 add_action( 'plugins_loaded', function() {
