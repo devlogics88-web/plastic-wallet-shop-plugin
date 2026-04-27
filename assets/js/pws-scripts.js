@@ -137,9 +137,10 @@
                 PWS.currentProductId = data.id;
                 PWS.currentPricingSlug = data.pricing_slug;
 
-                // Update title
+                // Update title and data attributes (use .data() to update jQuery cache)
                 $('#pws-product-name').text(data.name);
-                $('#pws-options').attr('data-product-id', data.id).attr('data-pricing-slug', data.pricing_slug);
+                $('#pws-options').data('product-id', data.id).data('pricing-slug', data.pricing_slug)
+                    .attr('data-product-id', data.id).attr('data-pricing-slug', data.pricing_slug);
 
                 // Update sizes dropdown
                 var $sizeSelect = $('#pws-size').empty();
@@ -532,11 +533,20 @@
     }
 
     function updateCartTotals(data) {
-        if (data.total) $('#pws-cart-total').text('£' + data.total);
+        var subtotal = data.subtotal ? parseFloat(data.subtotal.replace(/,/g,'')) : 0;
+        if (data.subtotal) {
+            $('#pws-cart-subtotal-amount').text('£' + data.subtotal);
+        }
+        if (subtotal > 0) {
+            var vat = (subtotal * 0.20).toFixed(2);
+            var totalWithVat = (subtotal * 1.20).toFixed(2);
+            $('#pws-cart-vat').text('£' + vat);
+            $('#pws-cart-total').text('£' + totalWithVat);
+        } else if (data.total) {
+            $('#pws-cart-total').text('£' + data.total);
+        }
         if (data.per_unit) {
-            $('#pws-cart-subtotal').text('(£' + data.per_unit + ' per unit)');
-        } else if (data.subtotal) {
-            $('#pws-cart-subtotal').text('£' + data.subtotal);
+            $('#pws-cart-subtotal').text('(£' + data.per_unit + ' per unit excl. VAT)');
         }
         if (data.cart_count !== undefined) updateCartCount(data.cart_count);
     }

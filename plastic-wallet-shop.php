@@ -732,24 +732,41 @@ class PWS_Pricing_System {
                         $thumbcut = $cart_item['pws_thumbcut'] ?? 'no';
                         $holepunch = $cart_item['pws_holepunch'] ?? 'none';
                         $openside = $cart_item['pws_openside'] ?? 'both';
-                        $unit_price = floatval($cart_item['pws_unit_price'] ?? 0);
                         $quantity = $cart_item['quantity'];
-                        $line_total = $unit_price * $quantity;
                         $original_product_id = $cart_item['pws_original_product_id'] ?? 0;
                         
-                        // Get product image
+                        // Use pws_total_price for precision, fall back to unit*qty
+                        $stored_total = floatval($cart_item['pws_total_price'] ?? 0);
+                        $unit_price = floatval($cart_item['pws_unit_price'] ?? 0);
+                        if ($stored_total > 0) {
+                            $line_total = $stored_total;
+                            $unit_price = $quantity > 0 ? ($stored_total / $quantity) : $unit_price;
+                        } else {
+                            $line_total = $unit_price * $quantity;
+                        }
+                        
+                        // Get product image from original WC product
                         $image_url = '';
                         if ($original_product_id) {
                             $wc_product = wc_get_product($original_product_id);
-                            if ($wc_product) {
+                            if ($wc_product && $wc_product->get_image_id()) {
                                 $image_url = wp_get_attachment_image_url($wc_product->get_image_id(), 'medium');
                             }
                         }
+                        
+                        // For custom/A-size items: check the page that contains the shortcode for a featured image
+                        if (!$image_url && !empty($cart_item['pws_is_custom_size'])) {
+                            $image_url = $this->get_custom_size_thumbnail();
+                        }
+                        if (!$image_url && !empty($cart_item['pws_size_type']) && $cart_item['pws_size_type'] === 'A Size') {
+                            $image_url = $this->get_a_size_thumbnail();
+                        }
+                        
                         if (!$image_url) {
                             $image_url = wc_placeholder_img_src('medium');
                         }
                         
-                        // Parse size for width/height
+                        // Parse size for width/height display
                         $size_parts = preg_split('/[xX×\s]+/', $size);
                         $width = isset($size_parts[0]) ? trim($size_parts[0]) : '';
                         $height = isset($size_parts[1]) ? trim($size_parts[1]) : '';
@@ -814,10 +831,26 @@ class PWS_Pricing_System {
             </table>
             
             <!-- Cart Footer -->
+            <?php
+                $vat_rate = 0.20;
+                $vat_amount = round($cart_total * $vat_rate, 2);
+                $total_with_vat = round($cart_total + $vat_amount, 2);
+            ?>
             <div class="pws-cart-footer">
                 <div class="pws-cart-totals">
-                    <span id="pws-cart-total" class="pws-total-amount">£<?php echo number_format($cart_total, 2); ?></span>
-                    <span id="pws-cart-subtotal" class="pws-total-unit">(£<?php echo number_format($total_items > 0 ? $cart_total / $total_items : 0, 2); ?> per unit)</span>
+                    <div class="pws-totals-row" style="display:flex;justify-content:flex-end;align-items:baseline;gap:10px;margin-bottom:5px;">
+                        <span class="pws-totals-label" style="font-size:14px;color:#555;">Subtotal:</span>
+                        <span id="pws-cart-subtotal-amount" class="pws-total-amount" style="font-size:22px;font-weight:800;">£<?php echo number_format($cart_total, 2); ?></span>
+                    </div>
+                    <div class="pws-totals-row" style="display:flex;justify-content:flex-end;align-items:baseline;gap:10px;margin-bottom:5px;">
+                        <span class="pws-totals-label" style="font-size:14px;color:#555;">VAT (20%):</span>
+                        <span id="pws-cart-vat" style="font-size:18px;font-weight:700;">£<?php echo number_format($vat_amount, 2); ?></span>
+                    </div>
+                    <div class="pws-totals-row" style="display:flex;justify-content:flex-end;align-items:baseline;gap:10px;margin-bottom:5px;padding-top:8px;border-top:2px solid #333;">
+                        <span class="pws-totals-label" style="font-size:14px;color:#555;">Total:</span>
+                        <span id="pws-cart-total" class="pws-total-amount" style="font-size:28px;font-weight:800;">£<?php echo number_format($total_with_vat, 2); ?></span>
+                    </div>
+                    <span id="pws-cart-subtotal" class="pws-total-unit" style="display:block;text-align:right;font-size:12px;color:#666;">(£<?php echo number_format($total_items > 0 ? $cart_total / $total_items : 0, 2); ?> per unit excl. VAT)</span>
                 </div>
                 <div class="pws-cart-buttons">
                     <a href="<?php echo esc_url(wc_get_page_permalink('shop')); ?>" class="pws-btn pws-btn-continue">Continue shopping</a>
@@ -847,10 +880,14 @@ class PWS_Pricing_System {
             $cart_total = 0;
             $total_items = 0;
             foreach (WC()->cart->get_cart() as $ci) {
-                $is_pws = (isset($ci['pws_custom']) && $ci['pws_custom'])
-                        || (isset($ci['pws_custom_item']) && $ci['pws_custom_item']);
-                if ($is_pws) {
-                    $cart_total += floatval($ci['pws_unit_price']) * $ci['quantity'];
+                $ci_is_pws = (isset($ci['pws_custom']) && $ci['pws_custom'])
+                           || (isset($ci['pws_custom_item']) && $ci['pws_custom_item']);
+                if ($ci_is_pws) {
+                    $ci_total = floatval($ci['pws_total_price'] ?? 0);
+                    if ($ci_total <= 0) {
+                        $ci_total = floatval($ci['pws_unit_price'] ?? 0) * $ci['quantity'];
+                    }
+                    $cart_total += $ci_total;
                 } else {
                     $cart_total += floatval($ci['data']->get_price()) * $ci['quantity'];
                 }
@@ -957,9 +994,12 @@ class PWS_Pricing_System {
                 if ($key === $cart_key) {
                     $ci_is_pws = (isset($ci['pws_custom']) && $ci['pws_custom'])
                               || (isset($ci['pws_custom_item']) && $ci['pws_custom_item']);
-                    if ($ci_is_pws && isset($ci['pws_unit_price'])) {
-                        $item_unit = floatval($ci['pws_unit_price']);
-                        $item_total = $item_unit * $ci['quantity'];
+                    if ($ci_is_pws) {
+                        $item_total = floatval($ci['pws_total_price'] ?? 0);
+                        if ($item_total <= 0) {
+                            $item_total = floatval($ci['pws_unit_price'] ?? 0) * $ci['quantity'];
+                        }
+                        $item_unit = $ci['quantity'] > 0 ? ($item_total / $ci['quantity']) : 0;
                     } else {
                         $item_total = isset($ci['line_total']) ? $ci['line_total'] : (floatval($ci['data']->get_price()) * $ci['quantity']);
                     }
@@ -973,8 +1013,12 @@ class PWS_Pricing_System {
             foreach ($cart->get_cart() as $ci) {
                 $ci_is_pws = (isset($ci['pws_custom']) && $ci['pws_custom'])
                           || (isset($ci['pws_custom_item']) && $ci['pws_custom_item']);
-                if ($ci_is_pws && isset($ci['pws_unit_price'])) {
-                    $cart_total += floatval($ci['pws_unit_price']) * $ci['quantity'];
+                if ($ci_is_pws) {
+                    $ci_total = floatval($ci['pws_total_price'] ?? 0);
+                    if ($ci_total <= 0) {
+                        $ci_total = floatval($ci['pws_unit_price'] ?? 0) * $ci['quantity'];
+                    }
+                    $cart_total += $ci_total;
                 } else {
                     $cart_total += floatval($ci['data']->get_price()) * $ci['quantity'];
                 }
@@ -1983,11 +2027,27 @@ class PWS_Pricing_System {
             }
         }
         
+        // Look up dimensions for cart qty recalculation
+        $prod_width = 0;
+        $prod_height = 0;
+        if ($product_id) {
+            $product_sizes = $this->get_product_sizes_config();
+            foreach ($product_sizes as $slug => $pdata) {
+                if (isset($pdata['wc_product_id']) && intval($pdata['wc_product_id']) === $product_id) {
+                    $prod_width = intval($pdata['width']);
+                    $prod_height = intval($pdata['height']);
+                    break;
+                }
+            }
+        }
+        
         $cart_item_data = array(
             'pws_custom'               => true,
             'pws_original_product_id'  => $product_id,
             'pws_product_name'         => $product_name,
             'pws_size'                 => sanitize_text_field($_POST['size']      ?? ''),
+            'pws_width'                => $prod_width,
+            'pws_height'               => $prod_height,
             'pws_thumbcut'             => sanitize_text_field($_POST['thumbcut']  ?? ''),
             'pws_holepunch'            => sanitize_text_field($_POST['holepunch'] ?? ''),
             'pws_openside'             => sanitize_text_field($_POST['openside']  ?? ''),
@@ -2044,8 +2104,18 @@ class PWS_Pricing_System {
         foreach ($cart->get_cart() as $cart_item) {
             $is_pws = (isset($cart_item['pws_custom']) && $cart_item['pws_custom'])
                     || (isset($cart_item['pws_custom_item']) && $cart_item['pws_custom_item']);
-            if ($is_pws && isset($cart_item['pws_unit_price'])) {
-                $cart_item['data']->set_price(floatval($cart_item['pws_unit_price']));
+            if ($is_pws) {
+                $qty = max(1, $cart_item['quantity']);
+                $total = isset($cart_item['pws_total_price']) ? floatval($cart_item['pws_total_price']) : 0;
+                $unit  = isset($cart_item['pws_unit_price']) ? floatval($cart_item['pws_unit_price']) : 0;
+                
+                // Use total/qty for full precision to prevent rounding drift
+                // e.g. £20.70/400 = £0.05175 rather than rounded £0.05
+                if ($total > 0 && $qty > 0) {
+                    $cart_item['data']->set_price($total / $qty);
+                } elseif ($unit > 0) {
+                    $cart_item['data']->set_price($unit);
+                }
             }
         }
     }
@@ -2070,6 +2140,50 @@ class PWS_Pricing_System {
         if (!empty($values['pws_openside'])) {
             $item->add_meta_data('Open Side', ucfirst($values['pws_openside']), true);
         }
+    }
+    
+    /**
+     * Get thumbnail for Custom Size items from the page containing [pws_custom_sizes]
+     */
+    private function get_custom_size_thumbnail() {
+        static $url = null;
+        if ($url !== null) return $url;
+        
+        global $wpdb;
+        $page_id = $wpdb->get_var(
+            "SELECT ID FROM {$wpdb->posts}
+             WHERE post_type = 'page' AND post_status = 'publish'
+             AND post_content LIKE '%[pws_custom_sizes%'
+             ORDER BY ID ASC LIMIT 1"
+        );
+        if ($page_id && has_post_thumbnail($page_id)) {
+            $url = get_the_post_thumbnail_url($page_id, 'medium');
+        } else {
+            $url = '';
+        }
+        return $url;
+    }
+    
+    /**
+     * Get thumbnail for A Size items from the page containing [pws_a_sizes]
+     */
+    private function get_a_size_thumbnail() {
+        static $url = null;
+        if ($url !== null) return $url;
+        
+        global $wpdb;
+        $page_id = $wpdb->get_var(
+            "SELECT ID FROM {$wpdb->posts}
+             WHERE post_type = 'page' AND post_status = 'publish'
+             AND post_content LIKE '%[pws_a_sizes%'
+             ORDER BY ID ASC LIMIT 1"
+        );
+        if ($page_id && has_post_thumbnail($page_id)) {
+            $url = get_the_post_thumbnail_url($page_id, 'medium');
+        } else {
+            $url = '';
+        }
+        return $url;
     }
     
     private function get_cart_product_id() {
@@ -3186,12 +3300,18 @@ class PWS_Pricing_System {
         $dimensions = isset( $a_sizes_config[ $size ]['dimensions'] ) ? $a_sizes_config[ $size ]['dimensions'] : '';
         $size_display = $size . ( $dimensions ? ' (' . $dimensions . ')' : '' );
         
+        // Store dimensions for cart qty recalculation
+        $a_width  = isset( $a_sizes_config[ $size ]['width'] )  ? intval( $a_sizes_config[ $size ]['width'] )  : 0;
+        $a_height = isset( $a_sizes_config[ $size ]['height'] ) ? intval( $a_sizes_config[ $size ]['height'] ) : 0;
+        
         $cart_item_data = array(
             'pws_custom'               => true,
             'pws_original_product_id'  => $original_product_id,
             'pws_product_name'         => $product_name,
             'pws_size'                 => $size_display,
             'pws_size_type'            => 'A Size',
+            'pws_width'                => $a_width,
+            'pws_height'               => $a_height,
             'pws_thumbcut'             => $thumbcut,
             'pws_holepunch'            => $holepunch,
             'pws_openside'             => $openside,
