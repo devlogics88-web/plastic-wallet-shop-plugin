@@ -3,7 +3,7 @@
  * Plugin Name: Plastic Wallet Shop - Custom Pricing System
  * Plugin URI: https://plasticwalletshop.co.uk
  * Description: A powerful, enterprise-grade WooCommerce extension for dynamic product pricing, custom sizing, and seamless cart integration. Features include real-time price calculations, bulk order suggestions, A-size configurations, and a beautiful, conversion-optimized checkout experience.
- * Version: 12.1.0
+ * Version: 12.2.0
  * Author: Shaan - Full Stack Developer
  * Author URI: https://plasticwalletshop.co.uk
  * License: GPL v2 or later
@@ -23,7 +23,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Plugin constants
-define( 'PWS_VERSION', '12.1.0' );
+define( 'PWS_VERSION', '12.2.0' );
 define( 'PWS_PLUGIN_PATH', plugin_dir_path( __FILE__ ) );
 define( 'PWS_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'PWS_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
@@ -181,70 +181,6 @@ class PWS_Pricing_System {
             return $custom_template;
         }
         return $template;
-    }
-    
-    /**
-     * Setup category override early
-     */
-    public function setup_category_override() {
-        if ($this->has_category_mapping()) {
-            $category = get_queried_object();
-            $products = $this->get_category_products($category->slug);
-            $this->enqueue_category_assets($products);
-            
-            // Add body class for CSS targeting
-            add_filter('body_class', function($classes) {
-                $classes[] = 'pws-has-mapping';
-                return $classes;
-            });
-            
-            // Remove Astra theme hooks
-            remove_action('astra_content_loop', 'astra_content_loop');
-            
-            // Remove WooCommerce hooks
-            remove_action('woocommerce_before_main_content', 'woocommerce_output_content_wrapper', 10);
-            remove_action('woocommerce_before_main_content', 'woocommerce_breadcrumb', 20);
-            remove_action('woocommerce_archive_description', 'woocommerce_taxonomy_archive_description', 10);
-            remove_action('woocommerce_archive_description', 'woocommerce_product_archive_description', 10);
-            remove_action('woocommerce_before_shop_loop', 'woocommerce_result_count', 20);
-            remove_action('woocommerce_before_shop_loop', 'woocommerce_catalog_ordering', 30);
-            remove_action('woocommerce_before_shop_loop_item_title', 'woocommerce_show_product_loop_sale_flash', 10);
-            remove_action('woocommerce_before_shop_loop_item_title', 'woocommerce_template_loop_product_thumbnail', 10);
-            remove_action('woocommerce_shop_loop_item_title', 'woocommerce_template_loop_product_title', 10);
-            remove_action('woocommerce_after_shop_loop_item_title', 'woocommerce_template_loop_rating', 5);
-            remove_action('woocommerce_after_shop_loop_item_title', 'woocommerce_template_loop_price', 10);
-            remove_action('woocommerce_after_shop_loop_item', 'woocommerce_template_loop_product_link_close', 5);
-            remove_action('woocommerce_after_shop_loop_item', 'woocommerce_template_loop_add_to_cart', 10);
-            remove_action('woocommerce_after_shop_loop', 'woocommerce_pagination', 10);
-            remove_action('woocommerce_after_main_content', 'woocommerce_output_content_wrapper_end', 10);
-            remove_action('woocommerce_sidebar', 'woocommerce_get_sidebar', 10);
-        }
-    }
-    
-    /**
-     * Maybe override category at main content
-     */
-    public function maybe_override_category() {
-        if ($this->has_category_mapping()) {
-            // Output our content and stop
-            $category = get_queried_object();
-            echo '<div class="pws-category-wrapper">';
-            echo $this->render_category_page(array('category' => $category->slug));
-            echo '</div>';
-            
-            // Remove everything else
-            remove_all_actions('woocommerce_archive_description');
-            remove_all_actions('woocommerce_before_shop_loop');
-            remove_all_actions('woocommerce_shop_loop');
-            remove_all_actions('woocommerce_after_shop_loop');
-            remove_all_actions('woocommerce_no_products_found');
-            remove_all_actions('woocommerce_after_main_content');
-            
-            // Add closing wrapper
-            add_action('woocommerce_after_main_content', function() {
-                // Nothing - we already closed
-            }, 999);
-        }
     }
     
     private function get_featured_product_ids() {
@@ -787,7 +723,8 @@ class PWS_Pricing_System {
                 <tbody>
                 <!-- Cart Items -->
                 <?php foreach ($cart_items as $cart_item_key => $cart_item) : 
-                    $is_pws = isset($cart_item['pws_custom']) && $cart_item['pws_custom'];
+                    $is_pws = (isset($cart_item['pws_custom']) && $cart_item['pws_custom'])
+                            || (isset($cart_item['pws_custom_item']) && $cart_item['pws_custom_item']);
                     
                     if ($is_pws) {
                         $product_name = $cart_item['pws_product_name'] ?? 'Product';
@@ -905,11 +842,27 @@ class PWS_Pricing_System {
         $cart_key = sanitize_text_field($_POST['cart_key'] ?? '');
         if (WC()->cart->remove_cart_item($cart_key)) {
             WC()->cart->calculate_totals();
+            
+            // Recalculate totals from PWS items accurately
+            $cart_total = 0;
+            $total_items = 0;
+            foreach (WC()->cart->get_cart() as $ci) {
+                $is_pws = (isset($ci['pws_custom']) && $ci['pws_custom'])
+                        || (isset($ci['pws_custom_item']) && $ci['pws_custom_item']);
+                if ($is_pws) {
+                    $cart_total += floatval($ci['pws_unit_price']) * $ci['quantity'];
+                } else {
+                    $cart_total += floatval($ci['data']->get_price()) * $ci['quantity'];
+                }
+                $total_items += $ci['quantity'];
+            }
+            
             wp_send_json_success(array(
                 'message'    => 'Item removed',
                 'cart_count' => count(WC()->cart->get_cart()),
-                'subtotal'   => number_format(WC()->cart->get_subtotal(), 2),
-                'total'      => number_format(floatval(WC()->cart->get_total('edit')), 2),
+                'subtotal'   => number_format($cart_total, 2),
+                'total'      => number_format($cart_total, 2),
+                'per_unit'   => $total_items > 0 ? number_format($cart_total / $total_items, 2) : '0.00',
             ));
         } else {
             wp_send_json_error(array('message' => 'Could not remove item'));
@@ -930,6 +883,7 @@ class PWS_Pricing_System {
     
     /**
      * AJAX: Update cart quantity
+     * Recalculates pricing using the formula so base_cost is applied correctly
      */
     public function ajax_update_cart_qty() {
         check_ajax_referer('pws_nonce', 'nonce');
@@ -938,22 +892,103 @@ class PWS_Pricing_System {
         }
         $cart_key = sanitize_text_field($_POST['cart_key'] ?? '');
         $quantity  = max(1, intval($_POST['quantity'] ?? 1));
-        if (WC()->cart->set_quantity($cart_key, $quantity)) {
-            WC()->cart->calculate_totals();
-            // Recalculate line total for this item
+        
+        $cart = WC()->cart;
+        $cart_items = $cart->get_cart();
+        
+        if (!isset($cart_items[$cart_key])) {
+            wp_send_json_error(array('message' => 'Item not found in cart'));
+            return;
+        }
+        
+        $item = $cart_items[$cart_key];
+        
+        // For PWS items, recalculate price with new quantity using the formula
+        $is_pws_item = (isset($item['pws_custom']) && $item['pws_custom'])
+                     || (isset($item['pws_custom_item']) && $item['pws_custom_item']);
+        if ($is_pws_item) {
+            $width = 0;
+            $height = 0;
+            $thumbcut = $item['pws_thumbcut'] ?? 'no';
+            $holepunch = $item['pws_holepunch'] ?? 'none';
+            
+            // Determine dimensions from the item data
+            if (isset($item['pws_width']) && isset($item['pws_height'])) {
+                $width = intval($item['pws_width']);
+                $height = intval($item['pws_height']);
+            } elseif (isset($item['pws_original_product_id']) && $item['pws_original_product_id']) {
+                $product_sizes = $this->get_product_sizes_config();
+                $original_id = intval($item['pws_original_product_id']);
+                foreach ($product_sizes as $slug => $data) {
+                    if (isset($data['wc_product_id']) && intval($data['wc_product_id']) === $original_id) {
+                        $width = intval($data['width']);
+                        $height = intval($data['height']);
+                        break;
+                    }
+                }
+            }
+            
+            // Parse dimensions from size string as fallback
+            if (($width <= 0 || $height <= 0) && !empty($item['pws_size'])) {
+                $size_str = $item['pws_size'];
+                if (preg_match('/([\d]+)\s*x\s*([\d]+)/i', $size_str, $matches)) {
+                    $width = intval($matches[1]);
+                    $height = intval($matches[2]);
+                }
+            }
+            
+            if ($width > 0 && $height > 0) {
+                $recalc = $this->calculate_price_from_dimensions($width, $height, $quantity, $thumbcut, $holepunch);
+                $new_unit_price = $recalc['unit'];
+                $new_total = $recalc['total'];
+                
+                // Update cart item data with recalculated prices
+                WC()->cart->cart_contents[$cart_key]['pws_unit_price'] = $new_unit_price;
+                WC()->cart->cart_contents[$cart_key]['pws_total_price'] = $new_total;
+            }
+        }
+        
+        if ($cart->set_quantity($cart_key, $quantity)) {
+            $cart->calculate_totals();
+            
             $item_total = 0;
-            foreach (WC()->cart->get_cart() as $key => $item) {
+            $item_unit = 0;
+            foreach ($cart->get_cart() as $key => $ci) {
                 if ($key === $cart_key) {
-                    $item_total = $item['line_total'] ?? ($item['pws_unit_price'] * $quantity);
+                    $ci_is_pws = (isset($ci['pws_custom']) && $ci['pws_custom'])
+                              || (isset($ci['pws_custom_item']) && $ci['pws_custom_item']);
+                    if ($ci_is_pws && isset($ci['pws_unit_price'])) {
+                        $item_unit = floatval($ci['pws_unit_price']);
+                        $item_total = $item_unit * $ci['quantity'];
+                    } else {
+                        $item_total = isset($ci['line_total']) ? $ci['line_total'] : (floatval($ci['data']->get_price()) * $ci['quantity']);
+                    }
                     break;
                 }
             }
+            
+            // Recalculate full cart total from all items
+            $cart_total = 0;
+            $total_items = 0;
+            foreach ($cart->get_cart() as $ci) {
+                $ci_is_pws = (isset($ci['pws_custom']) && $ci['pws_custom'])
+                          || (isset($ci['pws_custom_item']) && $ci['pws_custom_item']);
+                if ($ci_is_pws && isset($ci['pws_unit_price'])) {
+                    $cart_total += floatval($ci['pws_unit_price']) * $ci['quantity'];
+                } else {
+                    $cart_total += floatval($ci['data']->get_price()) * $ci['quantity'];
+                }
+                $total_items += $ci['quantity'];
+            }
+            
             wp_send_json_success(array(
                 'message'    => 'Updated',
-                'cart_count' => count(WC()->cart->get_cart()),
+                'cart_count' => count($cart->get_cart()),
                 'item_total' => number_format($item_total, 2),
-                'subtotal'   => number_format(WC()->cart->get_subtotal(), 2),
-                'total'      => number_format(floatval(WC()->cart->get_total('edit')), 2),
+                'item_unit'  => number_format($item_unit, 2),
+                'subtotal'   => number_format($cart_total, 2),
+                'total'      => number_format($cart_total, 2),
+                'per_unit'   => $total_items > 0 ? number_format($cart_total / $total_items, 2) : '0.00',
             ));
         } else {
             wp_send_json_error(array('message' => 'Could not update'));
@@ -1182,9 +1217,16 @@ class PWS_Pricing_System {
      * Get category slug for a product based on our mappings
      */
     private function get_product_category_slug($product_id) {
+        $product_id = intval($product_id);
         $mappings = $this->get_category_mappings();
-        foreach ($mappings as $category_slug => $product_ids) {
-            if (in_array($product_id, $product_ids)) {
+        foreach ($mappings as $category_slug => $mapping_data) {
+            $product_list = array();
+            if (isset($mapping_data['products']) && is_array($mapping_data['products'])) {
+                $product_list = $mapping_data['products'];
+            } elseif (is_array($mapping_data) && !isset($mapping_data['products'])) {
+                $product_list = $mapping_data;
+            }
+            if (in_array($product_id, array_map('intval', $product_list))) {
                 return $category_slug;
             }
         }
@@ -1658,7 +1700,7 @@ class PWS_Pricing_System {
         
         $pricing_slug = sanitize_text_field($_POST['pricing_slug'] ?? '');
         $size         = sanitize_text_field($_POST['size']         ?? '');
-        $quantity     = intval($_POST['quantity']  ?? 0);
+        $quantity     = max(1, intval($_POST['quantity']  ?? 1));
         $thumbcut     = sanitize_text_field($_POST['thumbcut']  ?? 'no');
         $holepunch    = sanitize_text_field($_POST['holepunch'] ?? 'none');
         $product_id = isset($_POST['product_id']) ? intval($_POST['product_id']) : 0;
@@ -1778,7 +1820,7 @@ class PWS_Pricing_System {
         
         $addon_total = ($thumbcut_addon + $holepunch_addon) * $quantity;
         $final_total = round($base_price + $addon_total, 2);
-        $final_unit = round($final_total / $quantity, 2);
+        $final_unit = round($final_total / max(1, $quantity), 4);
         
         // Bulk suggestions
         $bulk = array();
@@ -1787,7 +1829,7 @@ class PWS_Pricing_System {
                 $bq_base = round(((($width * $height) * $multiplier) * $bq / 100) + $base_cost, 2);
                 $bq_addon = ($thumbcut_addon + $holepunch_addon) * $bq;
                 $bq_total = round($bq_base + $bq_addon, 2);
-                $bq_unit = round($bq_total / $bq, 2);
+                $bq_unit = round($bq_total / $bq, 4);
                 $bulk[] = array(
                     'qty' => $bq,
                     'total' => number_format($bq_total, 2),
@@ -1802,7 +1844,6 @@ class PWS_Pricing_System {
             'bulk_suggestions' => $bulk,
             'raw_total' => $final_total,
             'raw_unit' => $final_unit,
-            'debug_dimensions' => $width . 'x' . $height . 'mm'
         ));
     }
     
@@ -1810,53 +1851,28 @@ class PWS_Pricing_System {
     public function ajax_calculate_custom_price() {
         check_ajax_referer('pws_nonce', 'nonce');
         
-        $width     = intval($_POST['width']    ?? 0);  // in mm
-        $height    = intval($_POST['height']   ?? 0);  // in mm
-        $quantity  = intval($_POST['quantity'] ?? 0);
+        $width     = max(1, intval($_POST['width']    ?? 50));
+        $height    = max(1, intval($_POST['height']   ?? 50));
+        $quantity  = max(1, intval($_POST['quantity'] ?? 1));
         $thumbcut  = sanitize_text_field($_POST['thumbcut']  ?? 'no');
         $holepunch = sanitize_text_field($_POST['holepunch'] ?? 'none');
-        $size_type = isset($_POST['size_type']) ? sanitize_text_field($_POST['size_type']) : 'custom';
         
-        // Get pricing parameters from admin settings (with defaults)
-        $pricing_params = get_option('pws_custom_pricing_params', array(
-            'multiplier' => 0.00072,
-            'base_cost' => 13.5
-        ));
+        $result = $this->calculate_price_from_dimensions($width, $height, $quantity, $thumbcut, $holepunch);
+        $final_total = $result['total'];
+        $final_unit = $result['unit'];
         
-        $multiplier = floatval($pricing_params['multiplier']);
-        $base_cost = floatval($pricing_params['base_cost']);
-        
-        // Safety check - ensure multiplier is correct
-        if ($multiplier > 0.001 || $multiplier <= 0) {
-            $multiplier = 0.00072; // Force correct default
-        }
-        
-        /**
-         * Formula: =ROUND((((Width_mm * Height_mm) * 0.00072) * Quantity / 100) + 13.5, 2)
-         */
-        $base_price = round(((($width * $height) * $multiplier) * $quantity / 100) + $base_cost, 2);
-        
-        // Add-ons per unit (unchanged from before)
         $thumbcut_addon = ($thumbcut === 'yes') ? 0.01 : 0;
         $holepunch_addon = ($holepunch !== 'none' && $holepunch !== '') ? 0.01 : 0;
         
-        // Calculate final prices
-        $addon_total = ($thumbcut_addon + $holepunch_addon) * $quantity;
-        $final_total = round($base_price + $addon_total, 2);
-        $final_unit = round($final_total / $quantity, 2);
-        
-        // Bulk suggestions (using same formula)
+        // Bulk suggestions
         $bulk = array();
         foreach (array(200, 400, 500, 1000) as $bq) {
             if ($bq > $quantity) {
-                $bq_base = round(((($width * $height) * $multiplier) * $bq / 100) + $base_cost, 2);
-                $bq_addon_total = ($thumbcut_addon + $holepunch_addon) * $bq;
-                $bq_final_total = round($bq_base + $bq_addon_total, 2);
-                $bq_unit = round($bq_final_total / $bq, 2);
+                $bq_result = $this->calculate_price_from_dimensions($width, $height, $bq, $thumbcut, $holepunch);
                 $bulk[] = array(
                     'qty' => $bq, 
-                    'total' => number_format($bq_final_total, 2), 
-                    'unit' => number_format($bq_unit, 2)
+                    'total' => number_format($bq_result['total'], 2), 
+                    'unit' => number_format($bq_result['unit'], 2)
                 );
                 if (count($bulk) >= 2) break;
             }
@@ -2000,12 +2016,25 @@ class PWS_Pricing_System {
     }
     
     public function display_cart_item_data($item_data, $cart_item) {
-        if (!isset($cart_item['pws_custom'])) return $item_data;
-        $item_data[] = array('key' => 'Product', 'value' => $cart_item['pws_product_name']);
-        $item_data[] = array('key' => 'Size', 'value' => $cart_item['pws_size']);
-        $item_data[] = array('key' => 'Thumbcuts', 'value' => ucfirst($cart_item['pws_thumbcut']));
-        $item_data[] = array('key' => 'Hole Punch', 'value' => ucfirst($cart_item['pws_holepunch']));
-        $item_data[] = array('key' => 'Open Side', 'value' => ucfirst($cart_item['pws_openside']));
+        $is_pws = (isset($cart_item['pws_custom']) && $cart_item['pws_custom'])
+                || (isset($cart_item['pws_custom_item']) && $cart_item['pws_custom_item']);
+        if (!$is_pws) return $item_data;
+        
+        if (!empty($cart_item['pws_product_name'])) {
+            $item_data[] = array('key' => 'Product', 'value' => $cart_item['pws_product_name']);
+        }
+        if (!empty($cart_item['pws_size'])) {
+            $item_data[] = array('key' => 'Size', 'value' => $cart_item['pws_size']);
+        }
+        if (!empty($cart_item['pws_thumbcut'])) {
+            $item_data[] = array('key' => 'Thumbcuts', 'value' => ucfirst($cart_item['pws_thumbcut']));
+        }
+        if (!empty($cart_item['pws_holepunch'])) {
+            $item_data[] = array('key' => 'Hole Punch', 'value' => ucfirst(str_replace('-', ' ', $cart_item['pws_holepunch'])));
+        }
+        if (!empty($cart_item['pws_openside'])) {
+            $item_data[] = array('key' => 'Open Side', 'value' => ucfirst($cart_item['pws_openside']));
+        }
         return $item_data;
     }
     
@@ -2013,19 +2042,34 @@ class PWS_Pricing_System {
         if (is_admin() && !defined('DOING_AJAX')) return;
         if (did_action('woocommerce_before_calculate_totals') >= 2) return;
         foreach ($cart->get_cart() as $cart_item) {
-            if (isset($cart_item['pws_custom']) && $cart_item['pws_custom']) {
-                $cart_item['data']->set_price($cart_item['pws_unit_price']);
+            $is_pws = (isset($cart_item['pws_custom']) && $cart_item['pws_custom'])
+                    || (isset($cart_item['pws_custom_item']) && $cart_item['pws_custom_item']);
+            if ($is_pws && isset($cart_item['pws_unit_price'])) {
+                $cart_item['data']->set_price(floatval($cart_item['pws_unit_price']));
             }
         }
     }
     
     public function save_order_item_meta($item, $cart_item_key, $values, $order) {
-        if (!isset($values['pws_custom'])) return;
-        $item->add_meta_data('Product Type', $values['pws_product_name'], true);
-        $item->add_meta_data('Size', $values['pws_size'], true);
-        $item->add_meta_data('Thumbcuts', ucfirst($values['pws_thumbcut']), true);
-        $item->add_meta_data('Hole Punch', ucfirst($values['pws_holepunch']), true);
-        $item->add_meta_data('Open Side', ucfirst($values['pws_openside']), true);
+        $is_pws = (isset($values['pws_custom']) && $values['pws_custom'])
+                || (isset($values['pws_custom_item']) && $values['pws_custom_item']);
+        if (!$is_pws) return;
+        
+        if (!empty($values['pws_product_name'])) {
+            $item->add_meta_data('Product Type', $values['pws_product_name'], true);
+        }
+        if (!empty($values['pws_size'])) {
+            $item->add_meta_data('Size', $values['pws_size'], true);
+        }
+        if (!empty($values['pws_thumbcut'])) {
+            $item->add_meta_data('Thumbcuts', ucfirst($values['pws_thumbcut']), true);
+        }
+        if (!empty($values['pws_holepunch'])) {
+            $item->add_meta_data('Hole Punch', ucfirst(str_replace('-', ' ', $values['pws_holepunch'])), true);
+        }
+        if (!empty($values['pws_openside'])) {
+            $item->add_meta_data('Open Side', ucfirst($values['pws_openside']), true);
+        }
     }
     
     private function get_cart_product_id() {
@@ -2788,43 +2832,6 @@ class PWS_Pricing_System {
     }
     
     /**
-     * Get default A sizes pricing
-     * 
-     * @return array Default pricing for A sizes
-     */
-    private function get_default_a_sizes_pricing() {
-        return array(
-            'A3' => array(
-                10 => 1.50, 15 => 1.40, 20 => 1.30, 25 => 1.25, 30 => 1.20,
-                50 => 1.15, 100 => 1.10, 200 => 1.05, 400 => 1.02, 500 => 1.00, 1000 => 0.95, 2000 => 0.90
-            ),
-            'A4' => array(
-                10 => 1.30, 15 => 1.22, 20 => 1.15, 25 => 1.10, 30 => 1.05,
-                50 => 1.00, 100 => 0.95, 200 => 0.90, 400 => 0.87, 500 => 0.85, 1000 => 0.80, 2000 => 0.75
-            ),
-            'A5' => array(
-                10 => 1.10, 15 => 1.05, 20 => 1.00, 25 => 0.95, 30 => 0.90,
-                50 => 0.85, 100 => 0.80, 200 => 0.75, 400 => 0.72, 500 => 0.70, 1000 => 0.65, 2000 => 0.60
-            ),
-            'A6' => array(
-                10 => 0.90, 15 => 0.85, 20 => 0.80, 25 => 0.77, 30 => 0.75,
-                50 => 0.70, 100 => 0.65, 200 => 0.60, 400 => 0.57, 500 => 0.55, 1000 => 0.50, 2000 => 0.45
-            ),
-            'A7' => array(
-                10 => 0.70, 15 => 0.67, 20 => 0.65, 25 => 0.62, 30 => 0.60,
-                50 => 0.55, 100 => 0.50, 200 => 0.45, 400 => 0.42, 500 => 0.40, 1000 => 0.35, 2000 => 0.30
-            ),
-            'A8' => array(
-                10 => 0.55, 15 => 0.52, 20 => 0.50, 25 => 0.47, 30 => 0.45,
-                50 => 0.42, 100 => 0.40, 200 => 0.37, 400 => 0.35, 500 => 0.32, 1000 => 0.28, 2000 => 0.25
-            ),
-        );
-    }
-    
-    /**
-     * Render A Sizes Configuration Admin Page
-     */
-    /**
      * Render A Sizes Configuration Admin Page
      * Allows adding, editing, deleting A sizes and configuring pricing formula
      */
@@ -2940,11 +2947,9 @@ class PWS_Pricing_System {
                     </thead>
                     <tbody>
                         <?php foreach ( $a_sizes_config as $size_key => $size_data ) : 
-                            // Calculate sample price for qty 100
-                            $width_cm = $size_data['width'] / 10;
-                            $height_cm = $size_data['height'] / 10;
-                            $sample_total = ($width_cm * $height_cm) * $pricing_params['multiplier'] * 100 + $pricing_params['base_cost'];
-                            $sample_unit = $sample_total / 100;
+                            $sample_result = $this->calculate_price_from_dimensions($size_data['width'], $size_data['height'], 100);
+                            $sample_total = $sample_result['total'];
+                            $sample_unit = $sample_result['unit'];
                         ?>
                         <tr data-size="<?php echo esc_attr( $size_key ); ?>">
                             <td><strong><?php echo esc_html( $size_key ); ?></strong></td>
@@ -3115,66 +3120,36 @@ class PWS_Pricing_System {
     
     /**
      * AJAX: Calculate A Size Price
-     * Uses the same algorithm as custom sizes but with predefined A size dimensions
-     * NEW Formula (Feb 2026): =ROUND((((Width_mm * Height_mm) * 0.00072) * Quantity / 100) + 13.5, 2)
+     * Uses the central calculate_price_from_dimensions with A size dimensions
      */
     public function ajax_calculate_a_size_price() {
         check_ajax_referer( 'pws_nonce', 'nonce' );
         
-        $size     = isset( $_POST['size'] ) ? sanitize_text_field( $_POST['size'] ) : 'A4';
-        $quantity = isset( $_POST['quantity'] ) ? absint( $_POST['quantity'] ) : 100;
-        $thumbcut = isset( $_POST['thumbcut'] ) ? sanitize_text_field( $_POST['thumbcut'] ) : 'no';
+        $size      = isset( $_POST['size'] ) ? sanitize_text_field( $_POST['size'] ) : 'A4';
+        $quantity  = max( 1, isset( $_POST['quantity'] ) ? absint( $_POST['quantity'] ) : 100 );
+        $thumbcut  = isset( $_POST['thumbcut'] ) ? sanitize_text_field( $_POST['thumbcut'] ) : 'no';
         $holepunch = isset( $_POST['holepunch'] ) ? sanitize_text_field( $_POST['holepunch'] ) : 'none';
         
-        // Get A sizes configuration
         $a_sizes_config = get_option( 'pws_a_sizes_config', $this->get_default_a_sizes_config() );
         
-        // Get dimensions for selected size (in mm)
-        $width = isset( $a_sizes_config[ $size ]['width'] ) ? floatval( $a_sizes_config[ $size ]['width'] ) : 210;
-        $height = isset( $a_sizes_config[ $size ]['height'] ) ? floatval( $a_sizes_config[ $size ]['height'] ) : 297;
+        $width  = isset( $a_sizes_config[ $size ]['width'] ) ? intval( $a_sizes_config[ $size ]['width'] ) : 210;
+        $height = isset( $a_sizes_config[ $size ]['height'] ) ? intval( $a_sizes_config[ $size ]['height'] ) : 297;
         
-        // Get pricing parameters from admin settings (with defaults)
-        $pricing_params = get_option('pws_custom_pricing_params', array(
-            'multiplier' => 0.00072,
-            'base_cost' => 13.5
-        ));
+        $result = $this->calculate_price_from_dimensions( $width, $height, $quantity, $thumbcut, $holepunch );
+        $final_total = $result['total'];
+        $final_unit  = $result['unit'];
         
-        $multiplier = floatval($pricing_params['multiplier']);
-        $base_cost = floatval($pricing_params['base_cost']);
-        
-        // Safety check - ensure multiplier is correct
-        if ($multiplier > 0.001 || $multiplier <= 0) {
-            $multiplier = 0.00072; // Force correct default
-        }
-        
-        /**
-         * Formula: =ROUND((((Width_mm * Height_mm) * 0.00072) * Quantity / 100) + 13.5, 2)
-         */
-        $base_price = round(((($width * $height) * $multiplier) * $quantity / 100) + $base_cost, 2);
-        
-        // Add-ons per unit (unchanged)
-        $thumbcut_addon = ($thumbcut === 'yes') ? 0.01 : 0;
-        $holepunch_addon = ($holepunch !== 'none' && $holepunch !== '') ? 0.01 : 0;
-        
-        // Calculate final prices
-        $addon_total = ($thumbcut_addon + $holepunch_addon) * $quantity;
-        $final_total = round($base_price + $addon_total, 2);
-        $final_unit = round($final_total / $quantity, 2);
-        
-        // Bulk suggestions (using same formula)
+        // Bulk suggestions
         $bulk_suggestions = array();
-        foreach (array(200, 400, 500, 1000) as $bq) {
-            if ($bq > $quantity) {
-                $bq_base = round(((($width * $height) * $multiplier) * $bq / 100) + $base_cost, 2);
-                $bq_addon_total = ($thumbcut_addon + $holepunch_addon) * $bq;
-                $bq_final_total = round($bq_base + $bq_addon_total, 2);
-                $bq_unit = round($bq_final_total / $bq, 2);
+        foreach ( array( 200, 400, 500, 1000 ) as $bq ) {
+            if ( $bq > $quantity ) {
+                $bq_result = $this->calculate_price_from_dimensions( $width, $height, $bq, $thumbcut, $holepunch );
                 $bulk_suggestions[] = array(
                     'qty'   => $bq,
-                    'total' => number_format($bq_final_total, 2),
-                    'unit'  => number_format($bq_unit, 2),
+                    'total' => number_format( $bq_result['total'], 2 ),
+                    'unit'  => number_format( $bq_result['unit'], 2 ),
                 );
-                if (count($bulk_suggestions) >= 2) break;
+                if ( count( $bulk_suggestions ) >= 2 ) break;
             }
         }
         
@@ -3196,40 +3171,46 @@ class PWS_Pricing_System {
             wp_send_json_error(array('message' => 'Cart not available')); return;
         }
         
-        $product_id   = isset( $_POST['product_id'] ) ? absint( $_POST['product_id'] ) : 4453;
+        $original_product_id = isset( $_POST['product_id'] ) ? absint( $_POST['product_id'] ) : 4453;
         $product_name = isset( $_POST['product_name'] ) ? sanitize_text_field( $_POST['product_name'] ) : 'A Size Wallets';
         $size         = isset( $_POST['size'] ) ? sanitize_text_field( $_POST['size'] ) : 'A4';
-        $quantity     = isset( $_POST['quantity'] ) ? absint( $_POST['quantity'] ) : 100;
+        $quantity     = isset( $_POST['quantity'] ) ? max( 1, absint( $_POST['quantity'] ) ) : 100;
         $thumbcut     = isset( $_POST['thumbcut'] ) ? sanitize_text_field( $_POST['thumbcut'] ) : 'no';
         $holepunch    = isset( $_POST['holepunch'] ) ? sanitize_text_field( $_POST['holepunch'] ) : 'none';
         $openside     = isset( $_POST['openside'] ) ? sanitize_text_field( $_POST['openside'] ) : 'both';
         $total_price  = isset( $_POST['total_price'] ) ? floatval( $_POST['total_price'] ) : 0;
         $unit_price   = isset( $_POST['unit_price'] ) ? floatval( $_POST['unit_price'] ) : 0;
         
-        // Get A size dimensions
+        // Get A size dimensions for display
         $a_sizes_config = get_option( 'pws_a_sizes_config', $this->get_default_a_sizes_config() );
         $dimensions = isset( $a_sizes_config[ $size ]['dimensions'] ) ? $a_sizes_config[ $size ]['dimensions'] : '';
+        $size_display = $size . ( $dimensions ? ' (' . $dimensions . ')' : '' );
         
         $cart_item_data = array(
-            'pws_custom_item'  => true,
-            'pws_product_name' => $product_name,
-            'pws_size'         => $size,
-            'pws_size_type'    => 'A Size',
-            'pws_dimensions'   => $dimensions,
-            'pws_thumbcut'     => $thumbcut,
-            'pws_holepunch'    => $holepunch,
-            'pws_openside'     => $openside,
-            'pws_quantity'     => $quantity,
-            'pws_unit_price'   => $unit_price,
-            'pws_total_price'  => $total_price,
-            'unique_key'       => md5( microtime() . wp_rand() ),
+            'pws_custom'               => true,
+            'pws_original_product_id'  => $original_product_id,
+            'pws_product_name'         => $product_name,
+            'pws_size'                 => $size_display,
+            'pws_size_type'            => 'A Size',
+            'pws_thumbcut'             => $thumbcut,
+            'pws_holepunch'            => $holepunch,
+            'pws_openside'             => $openside,
+            'pws_unit_price'           => $unit_price,
+            'pws_total_price'          => $total_price,
+            'pws_unique_key'           => md5( microtime() . wp_rand() ),
         );
         
-        $added = WC()->cart->add_to_cart( $product_id, 1, 0, array(), $cart_item_data );
+        $added = WC()->cart->add_to_cart(
+            $this->get_cart_product_id(),
+            $quantity,
+            0,
+            array(),
+            $cart_item_data
+        );
         
         if ( $added ) {
             wp_send_json_success( array(
-                'message'    => 'Added to cart!',
+                'message'    => 'Added to basket',
                 'cart_count' => count(WC()->cart->get_cart()),
                 'cart_url'   => wc_get_cart_url(),
             ) );
@@ -3324,6 +3305,10 @@ class PWS_Pricing_System {
      * Calculate price for a product based on mm dimensions
      */
     public function calculate_price_from_dimensions($width, $height, $quantity, $thumbcut = 'no', $holepunch = 'none') {
+        $width = max(1, intval($width));
+        $height = max(1, intval($height));
+        $quantity = max(1, intval($quantity));
+        
         $pricing_params = get_option('pws_custom_pricing_params', array(
             'multiplier' => 0.00072,
             'base_cost' => 13.5
@@ -3332,16 +3317,18 @@ class PWS_Pricing_System {
         $multiplier = floatval($pricing_params['multiplier']);
         $base_cost = floatval($pricing_params['base_cost']);
         
-        // Formula: ROUND((((Width_mm * Height_mm) * 0.00072) * Quantity / 100) + 13.5, 2)
+        if ($multiplier > 0.001 || $multiplier <= 0) {
+            $multiplier = 0.00072;
+        }
+        
         $base_price = round(((($width * $height) * $multiplier) * $quantity / 100) + $base_cost, 2);
         
-        // Add-ons
         $thumbcut_addon = ($thumbcut === 'yes') ? 0.01 : 0;
         $holepunch_addon = ($holepunch !== 'none' && $holepunch !== '') ? 0.01 : 0;
         
         $addon_total = ($thumbcut_addon + $holepunch_addon) * $quantity;
         $final_total = round($base_price + $addon_total, 2);
-        $final_unit = round($final_total / $quantity, 2);
+        $final_unit = round($final_total / $quantity, 4);
         
         return array(
             'total' => $final_total,

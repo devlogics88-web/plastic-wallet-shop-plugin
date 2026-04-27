@@ -300,10 +300,6 @@
     // ========================================
     // CUSTOM SIZES (Custom Orders)
     // ========================================
-    function handleCustomSizeChange() {
-        calculateCustomPrice();
-    }
-
     function calculateCustomPrice() {
         var width = parseInt($('#pws-custom-width').val()) || 50;
         var height = parseInt($('#pws-custom-height').val()) || 50;
@@ -382,19 +378,6 @@
     // ========================================
     // A SIZES
     // ========================================
-    var aSizeDimensions = {
-        'A3': { width: 297, height: 420 },
-        'A4': { width: 210, height: 297 },
-        'A5': { width: 148, height: 210 },
-        'A6': { width: 105, height: 148 },
-        'A7': { width: 74, height: 105 },
-        'A8': { width: 50, height: 80 }
-    };
-    
-    /**
-     * Calculate A Size Price
-     * Uses admin-configured pricing from database
-     */
     function calculateAPrice() {
         var size = $('#pws-a-size').val();
         
@@ -505,7 +488,9 @@
         var $row = $input.closest('tr');
         var cartKey = $row.data('cart-key');
         var newQty = parseInt($input.val()) || 1;
+        if (newQty < 1) { newQty = 1; $input.val(1); }
 
+        $row.css('opacity', '0.5');
         $.ajax({
             url: pws_data.ajax_url,
             type: 'POST',
@@ -515,7 +500,8 @@
                     $row.find('.pws-item-total').text('£' + response.data.item_total);
                     updateCartTotals(response.data);
                 }
-            }
+            },
+            complete: function() { $row.css('opacity', '1'); }
         });
     }
 
@@ -546,8 +532,12 @@
     }
 
     function updateCartTotals(data) {
-        if (data.subtotal) $('#pws-cart-subtotal').text('£' + data.subtotal);
         if (data.total) $('#pws-cart-total').text('£' + data.total);
+        if (data.per_unit) {
+            $('#pws-cart-subtotal').text('(£' + data.per_unit + ' per unit)');
+        } else if (data.subtotal) {
+            $('#pws-cart-subtotal').text('£' + data.subtotal);
+        }
         if (data.cart_count !== undefined) updateCartCount(data.cart_count);
     }
 
