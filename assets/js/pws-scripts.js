@@ -137,9 +137,10 @@
                 PWS.currentProductId = data.id;
                 PWS.currentPricingSlug = data.pricing_slug;
 
-                // Update title
+                // Update title and data attributes (use .data() to update jQuery cache)
                 $('#pws-product-name').text(data.name);
-                $('#pws-options').attr('data-product-id', data.id).attr('data-pricing-slug', data.pricing_slug);
+                $('#pws-options').data('product-id', data.id).data('pricing-slug', data.pricing_slug)
+                    .attr('data-product-id', data.id).attr('data-pricing-slug', data.pricing_slug);
 
                 // Update sizes dropdown
                 var $sizeSelect = $('#pws-size').empty();
@@ -300,10 +301,6 @@
     // ========================================
     // CUSTOM SIZES (Custom Orders)
     // ========================================
-    function handleCustomSizeChange() {
-        calculateCustomPrice();
-    }
-
     function calculateCustomPrice() {
         var width = parseInt($('#pws-custom-width').val()) || 50;
         var height = parseInt($('#pws-custom-height').val()) || 50;
@@ -382,19 +379,6 @@
     // ========================================
     // A SIZES
     // ========================================
-    var aSizeDimensions = {
-        'A3': { width: 297, height: 420 },
-        'A4': { width: 210, height: 297 },
-        'A5': { width: 148, height: 210 },
-        'A6': { width: 105, height: 148 },
-        'A7': { width: 74, height: 105 },
-        'A8': { width: 50, height: 80 }
-    };
-    
-    /**
-     * Calculate A Size Price
-     * Uses admin-configured pricing from database
-     */
     function calculateAPrice() {
         var size = $('#pws-a-size').val();
         
@@ -505,7 +489,9 @@
         var $row = $input.closest('tr');
         var cartKey = $row.data('cart-key');
         var newQty = parseInt($input.val()) || 1;
+        if (newQty < 1) { newQty = 1; $input.val(1); }
 
+        $row.css('opacity', '0.5');
         $.ajax({
             url: pws_data.ajax_url,
             type: 'POST',
@@ -515,7 +501,8 @@
                     $row.find('.pws-item-total').text('£' + response.data.item_total);
                     updateCartTotals(response.data);
                 }
-            }
+            },
+            complete: function() { $row.css('opacity', '1'); }
         });
     }
 
@@ -546,8 +533,21 @@
     }
 
     function updateCartTotals(data) {
-        if (data.subtotal) $('#pws-cart-subtotal').text('£' + data.subtotal);
-        if (data.total) $('#pws-cart-total').text('£' + data.total);
+        var subtotal = data.subtotal ? parseFloat(data.subtotal.replace(/,/g,'')) : 0;
+        if (data.subtotal) {
+            $('#pws-cart-subtotal-amount').text('£' + data.subtotal);
+        }
+        if (subtotal > 0) {
+            var vat = (subtotal * 0.20).toFixed(2);
+            var totalWithVat = (subtotal * 1.20).toFixed(2);
+            $('#pws-cart-vat').text('£' + vat);
+            $('#pws-cart-total').text('£' + totalWithVat);
+        } else if (data.total) {
+            $('#pws-cart-total').text('£' + data.total);
+        }
+        if (data.per_unit) {
+            $('#pws-cart-subtotal').text('(£' + data.per_unit + ' per unit excl. VAT)');
+        }
         if (data.cart_count !== undefined) updateCartCount(data.cart_count);
     }
 
